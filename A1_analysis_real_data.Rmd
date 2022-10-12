@@ -1,0 +1,526 @@
+---
+title: "A1_analyzing_real_data"
+author: "Maria Olsen"
+date: "2022-10-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse,brms,tidybayes,gridExtra)
+```
+
+# Part 2 - Strong in the Bayesian ken, you are now ready to analyse the actual data
+
+- Describe your sample (n, age, gender, clinical and cognitive features of the two groups) and critically assess whether the groups (ASD and TD) are balanced. Briefly discuss whether the data is enough given the simulations in part 1.
+- Describe linguistic development (in terms of MLU over time) in TD and ASD children (as a function of group). Discuss the difference (if any) between the two groups.
+- Describe individual differences in linguistic development: do all kids follow the same path? Are all kids reflected by the general trend for their group?
+
+- Include additional predictors in your model of language development (N.B. not other indexes of child language: types and tokens, that'd be cheating). Identify the best model, by conceptual reasoning, model comparison or a mix. Report the model you choose (and name its competitors, if any) and discuss why it's the best model.
+
+
+```{r}
+#reading in data 
+d_real <- read.csv("data_clean.csv")
+d_real <- mutate(d_real, Diag=Diagnosis)
+
+d_real_no_0 <- filter(d_real, CHI_MLU != 0)
+view(d_real_1)
+
+d_real_only_0 <- filter(d_real, CHI_MLU == 0)
+
+```
+
+
+```{r}
+ggplot(d_real, aes(Visit, CHI_MLU, color = Diag, group = Child.ID)) + 
+  theme_bw() + 
+  geom_point() + 
+  geom_line(alpha = 0.3)
+
+vis_real_data <- ggplot(d_real_no_0, aes(Visit, CHI_MLU, color = Diag, group = Child.ID)) + 
+  theme_bw() + 
+  geom_point() + 
+  geom_line(alpha = 0.3)
+
+ggsave("vis_real_data.png", vis_real_data)
+vis_real_data
+
+length(unique(d_real$Child.ID))
+length(unique(d_real$Child.ID[d_real$Diag=="ASD"]))
+length(unique(d_real$Child.ID[d_real$Diag=="TD"]))
+```
+
+```{r}
+MLU_f <- bf(CHI_MLU ~ 0 + Diag + Diag:Visit + (1 + Visit|Child.ID))
+
+```
+
+
+
+```{r}
+MLU_f_prior <- c(
+  prior(normal(0, 0.2), class=b, lb=0),
+  prior(normal(0.41, 0.41), class=b, coef= "DiagASD"),
+  prior(normal(0.41, 0.22), class=b, coef= "DiagTD"),
+  prior(normal(0.15, 0.1), class=b, coef= "DiagASD:Visit"),
+  prior(normal(0.2, 0.08), class=b, coef= "DiagTD:Visit"),
+  prior(normal(0, 0.2), class=sd, coef= Intercept, group=Child.ID), 
+  prior(normal(0, 0.1), class=sd, coef= Visit, group=Child.ID), 
+  prior(normal(0, 0.2), class= sigma),
+  prior(lkj(1), class= "cor") 
+)
+
+get_prior(MLU_f,
+          data = d_real_no_0,
+          family = lognormal)
+```
+
+
+```{r}
+MLU_f_prior_s <- 
+  brm(
+    MLU_f, 
+    data = d_real_no_0,
+    family = lognormal,
+    prior = MLU_f_prior,  
+    sample_prior = "only", 
+    iter = 5000,
+    warmup = 1000,
+    backend = "cmdstanr",
+    threads = threading(2),
+    cores = 2,
+    chains = 2,
+    file = "MLU_f_prior_no_0",
+    control = list(adapt_delta = 0.99, max_treedepth = 20))
+
+pp_check_prior_real_d_no_0 <- pp_check(MLU_f_prior_s, ndraws = 100)
+#ggsave("pp_check_prior_real_d_no_0.png", pp_check_prior_real_d_no_0)
+pp_check_prior_real_d_no_0
+
+
+```
+
+
+```{r}
+MLU_f_posterior_no_0 <- 
+  brm(
+    MLU_f, 
+    data = d_real_no_0,
+    family = lognormal,
+    prior = MLU_f_prior,  
+    sample_prior = T, 
+    iter = 5000,
+    warmup = 1000,
+    backend = "cmdstanr",
+    threads = threading(2),
+    cores = 2,
+    chains = 2,
+    file = "MLU_f_posterior_1_no_0",
+    control = list(adapt_delta = 0.99, max_treedepth = 20))
+
+
+pp_check_posterior_real_d_no_0 <- pp_check(MLU_f_posterior_no_0, ndraws = 100)
+ggsave("pp_check_posterior_real_d_no_0.png", pp_check_posterior_real_d_no_0)
+pp_check_posterior_real_d_no_0
+
+```
+
+
+```{r}
+plot(conditional_effects(MLU_f_posterior_no_0), points = T)
+
+```
+
+
+
+```{r}
+MLU_f_pp_samp <- as_draws_df(MLU_f_posterior_no_0)
+
+
+
+PP_update_plot_inter_ASD <- ggplot(MLU_f_pp_samp) +
+  geom_density(aes(prior_b_DiagASD), fill="steelblue", color="black",alpha=0.6) +
+  geom_density(aes(b_DiagASD), fill="#FC4E07", color="black",alpha=0.6) + 
+  labs(title = "Intercept ASD")+
+  theme_classic()
+
+PP_update_plot_inter_TD <- ggplot(MLU_f_pp_samp) +
+  geom_density(aes(prior_b_DiagTD), fill="steelblue", color="black",alpha=0.6) +
+  geom_density(aes(b_DiagTD), fill="#FC4E07", color="black",alpha=0.6) + 
+  labs(title = "Intercept TD")+
+  theme_classic()
+
+PP_update_plot_slope_ASD <- ggplot(MLU_f_pp_samp) +
+  geom_density(aes(MLU_f_pp_samp$'prior_b_DiagASD:Visit'), fill="steelblue", color="black",alpha=0.6) +
+  geom_density(aes(MLU_f_pp_samp$'b_DiagASD:Visit'), fill="#FC4E07", color="black",alpha=0.6) + 
+  labs(title = "Slope ASD")+
+  theme_classic()
+
+PP_update_plot_slope_TD <- ggplot(MLU_f_pp_samp) +
+  geom_density(aes(MLU_f_pp_samp$'prior_b_DiagTD:Visit'), fill="steelblue", color="black",alpha=0.6) +
+  geom_density(aes(MLU_f_pp_samp$'b_DiagTD:Visit'), fill="#FC4E07", color="black",alpha=0.6) + 
+  labs(title = "Slope TD")+
+  theme_classic()
+
+PP_update_plot_ind_intercept_ASD <- ggplot(MLU_f_pp_samp) +
+  geom_density(aes(prior_sd_Child.ID__Intercept), fill="steelblue", color="black",alpha=0.6) +
+  geom_density(aes(sd_Child.ID__Intercept), fill="#FC4E07", color="black",alpha=0.6) + 
+  labs(title = "Individual Intercept")+
+  theme_classic()
+
+PP_update_plot_ind_slope_ASD <- ggplot(MLU_f_pp_samp) +
+  geom_density(aes(prior_sd_Child.ID__Visit), fill="steelblue", color="black",alpha=0.6) +
+  geom_density(aes(sd_Child.ID__Visit), fill="#FC4E07", color="black",alpha=0.6) + 
+  labs(title = "Individual slope")+
+  theme_classic()
+
+#ggplot(MLU_f3_pp_samp) +
+#  geom_density(aes(prior_cor_ID__Intercept__Visit), fill="steelblue", color="black",alpha=0.6) +
+#  geom_density(aes(cor_ID__Intercept__Visit), fill="#FC4E07", color="black",alpha=0.6) + 
+#  labs(title = "cor_ID__Intercept__Visit model 3")+
+#  theme_classic() #not working, maybe not necessary
+
+PP_update_plot_sigma <- ggplot(MLU_f_pp_samp) +
+  geom_density(aes(prior_sigma), fill="steelblue", color="black",alpha=0.6) +
+  geom_density(aes(sigma), fill="#FC4E07", color="black",alpha=0.6) + 
+  labs(title = "Sigma")+
+  theme_classic()
+
+
+
+PP_update_plot_Intercepts <- grid.arrange(PP_update_plot_inter_ASD, PP_update_plot_inter_TD)
+PP_update_plot_Slopes <- grid.arrange(PP_update_plot_slope_ASD, PP_update_plot_slope_TD)
+PP_update_plot_ind_slope_inter_sigma <- grid.arrange(PP_update_plot_ind_intercept_ASD, PP_update_plot_ind_slope_ASD, PP_update_plot_sigma)
+
+
+ggsave("PP_update_plot_Intercepts.png", PP_update_plot_Intercepts)
+ggsave("PP_update_plot_Slopes.png", PP_update_plot_Slopes)
+ggsave("PP_update_plot_ind_slope_inter_sigma.png", PP_update_plot_ind_slope_inter_sigma)
+
+PP_update_plot_Intercepts
+PP_update_plot_Slopes
+PP_update_plot_ind_slope_inter_sigma
+```
+
+
+
+```{r}
+plot(MLU_f_posterior_no_0)
+```
+
+
+```{r}
+summary(MLU_f_posterior_no_0)
+
+```
+
+
+```{r}
+hypothesis(MLU_f_posterior_no_0, "DiagASD:Visit<DiagTD:Visit")
+hypothesis(MLU_f_posterior_no_0, "DiagASD>DiagTD")
+
+hypothesis(MLU_f_posterior_no_0, "DiagASD:Visit<DiagTD:Visit", group = "Child.ID", scope="coef")
+
+hypothesis(MLU_f_posterior_no_0, "Visit<0", group = "Child.ID", scope="coef")
+hypothesis(MLU_f_posterior_no_0, "Visit<0.04", group = "Child.ID", scope="coef")
+
+
+```
+
+
+```{r}
+summary(MLU_f_posterior_no_0)
+```
+
+#trying a pooling plot
+```{r}
+plot_df <- tibble(
+  Child.ID = rownames(coef(MLU_f_posterior_no_0)[["Child.ID"]][,,"Intercept"]),
+  ADS = coef(MLU_f_posterior_no_0)[["Child.ID"]][,,"Intercept"][,1],
+  TD = ADS + coef(MLU_f_posterior_no_0)[["Child.ID"]][,,"Visit"][,1],
+  Type = "partial pooling"
+) %>% pivot_longer(ADS:TD) %>% dplyr::rename(
+  Diag = name,
+  CHI_MLU = value
+)
+df <- d_real_no_0[, c("Child.ID", "Diag", "CHI_MLU", "Visit")] %>%
+  mutate(Type = "no pooling")
+view(df)
+
+pool_df <- df[,c("Child.ID", "Diag")] %>%
+  mutate(
+    CHI_MLU = ifelse(Diag=="ADS", mean(df$CHI_MLU[df$CHI_MLU=="ADS"]), mean(df$CHI_MLU[df$Diag=="TD"])),
+    Type = "total pooling"
+  )
+view(pool_df)
+
+plot_df_2 <- rbind(plot_df,df) 
+
+plot_df_2 <- rbind(plot_df,pool_df) 
+
+plot_df_2 <- plot_df %>%
+  mutate(Diag=as.numeric(as.factor(Diag)))
+
+view(plot_df)
+
+
+pooling_plot <- ggplot(plot_df, aes(Diag, CHI_MLU, color = Type)) + 
+  geom_path(size = 1) + 
+  geom_point() + 
+  facet_wrap(.~Child.ID) +
+  scale_x_continuous(breaks=seq(1, 2, 1)) +
+  theme_bw() +
+  theme(axis.title.x = element_text(size = 13),
+        axis.text.y = element_text(size = 12),
+        axis.text.x = element_text(size = 12),
+        axis.title.y = element_text(size = 13),
+        strip.background = element_rect(color="white", fill="white", size=1.5, linetype="solid"),
+        strip.text.x = element_text(size = 10, color = "black"))
+
+ggsave("pooling_plot.png", pooling_plot)
+
+```
+
+
+#?????????????????
+```{r}
+df_no_pool <- d_real_no_0[, c("Child.ID", "Diag", "CHI_MLU", "Visit")] %>%
+  mutate(Type = "no pooling")
+
+df_total_pool <- d_real_no_0[, c("Child.ID", "Diag", "CHI_MLU", "Visit")]
+
+for (i in seq(nrow(df_total_pool))){
+  ifelse(df_total_pool$Diag=="ASD" & df_total_pool$Visit==1, df_total_pool$CHI_MLU[i] <- 0.22+0.04*0, df_total_pool$CHI_MLU[i] <- 0.19+0.17*0)
+  ifelse(df_total_pool$Diag=="ASD" & df_total_pool$Visit==2, df_total_pool$CHI_MLU[i] <- 0.22+0.04*1, df_total_pool$CHI_MLU[i] <- 0.19+0.17*1)
+  ifelse(df_total_pool$Diag=="ASD" & df_total_pool$Visit==3, df_total_pool$CHI_MLU[i] <- 0.22+0.04*2, df_total_pool$CHI_MLU[i] <- 0.19+0.17*2)
+  ifelse(df_total_pool$Diag=="ASD" & df_total_pool$Visit==4, df_total_pool$CHI_MLU[i] <- 0.22+0.04*3, df_total_pool$CHI_MLU[i] <- 0.19+0.17*3)
+  ifelse(df_total_pool$Diag=="ASD" & df_total_pool$Visit==5, df_total_pool$CHI_MLU[i] <- 0.22+0.04*4, df_total_pool$CHI_MLU[i] <- 0.19+0.17*4)
+  ifelse(df_total_pool$Diag=="ASD" & df_total_pool$Visit==6, df_total_pool$CHI_MLU[i] <- 0.22+0.04*5, df_total_pool$CHI_MLU[i] <- 0.19+0.17*5)
+}
+
+view(no_pool_MLU_list)
+view(df_total_pool)
+
+
+```
+
+
+#sensitivity check ASD the real one
+```{r}
+ASD_prior_SD_real <- seq(0.009, 0.15, length.out = 16)
+#My priors
+ASD_priors_real <- MLU_f_prior  
+
+#create empty sets to store output of the loop for ASD:
+real_posterior_prediction_ASD <- c()
+real_posterior_prediction_ASD_lci <- c()
+real_posterior_prediction_ASD_uci <- c()
+
+#Making all the priors we want to check (aka just changing the sd)
+real_sd_priors <- c(
+  prior(normal(0.15, 0.009), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.01), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.02), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.03), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.04), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.05), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.06), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.07), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.08), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.09), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.10), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.11), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.12), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.13), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.14), class = b, coef= "DiagASD:Visit"),
+  prior(normal(0.15, 0.15), class = b, coef= "DiagASD:Visit")
+)
+
+#loop through making priors with different sd
+for (i in seq(1, 16)) {
+  ASD_priors_real[4,] <- real_sd_priors[i,]
+  real_model_for_loop <- brm(
+    MLU_f,
+    data= d_real_no_0,
+    family = lognormal,
+    prior = ASD_priors_real,
+    sample_prior = T,
+    iter = 5000,
+    warmup = 1000,
+    backend = "cmdstanr",
+    threads = threading(2),
+    cores = 2,
+    chains = 2,
+    control = list(adapt_delta = 0.99, max_treedepth = 20)
+  )
+    
+  Model_for_loop_samp_real <- as_draws_df(real_model_for_loop)
+  #posterior_predictions <- spread_draws(model_for_loop, b_DiagASD:Visit) #slope, so b_DiagASD:Visit
+  real_posterior_predictions_ASD <- Model_for_loop_samp_real[,3]
+  real_posterior_prediction_ASD[i] <- median(real_posterior_predictions_ASD$`b_DiagASD:Visit`)
+  real_posterior_prediction_ASD_lci[i] <- quantile(real_posterior_predictions_ASD$`b_DiagASD:Visit`, prob = 0.025) #lower boundy for 95% interval
+  real_posterior_prediction_ASD_uci[i] <- quantile(real_posterior_predictions_ASD$`b_DiagASD:Visit`, prob = 0.975) #upper boundry for 95% interval
+}
+
+#view(Model_for_loop_samp_real)
+
+#Making dataframe from values from loop
+real_sensitivity_check_ASD <- data.frame(ASD_prior_SD_real, real_posterior_prediction_ASD, real_posterior_prediction_ASD_lci, real_posterior_prediction_ASD_uci) 
+
+#visualizing the sensitivity plot
+real_rubostness_check_asd <- ggplot(data=real_sensitivity_check_ASD, aes(x=ASD_prior_SD_real, y=real_posterior_prediction_ASD)) +
+  geom_point(size = 3) +
+  geom_pointrange(ymin = real_posterior_prediction_ASD_lci, ymax = real_posterior_prediction_ASD_uci) + #pointrange is 95% interval (vertical lines for each dot)
+  ylim(0.001, 0.20) + #range for the slope (y-aksis range)
+  labs(x="Standard Deviation of Slope Prior", 
+       y="Posterior Estimate for Slope", 
+       title="Sensitivity analysis for multi-level model ASD") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size = 15),
+        axis.title.x = element_text(size = 13),
+        axis.text.y = element_text(size = 12),
+        axis.text.x = element_text(size = 12),
+        axis.title.y = element_text(size = 13))
+
+
+
+
+ggsave("true_real_rubostness_check_asd_no_0.png", plot=real_rubostness_check_asd)
+real_rubostness_check_asd
+
+```
+
+
+
+#sensitivity check TD the real one
+```{r}
+TD_prior_SD_real <- seq(0.009, 0.15, length.out = 16)
+#My priors
+TD_priors_real <- MLU_f_prior  
+
+#create empty sets to store output of the loop for ASD:
+real_posterior_prediction_TD <- c()
+real_posterior_prediction_TD_lci <- c()
+real_posterior_prediction_TD_uci <- c()
+
+#Making all the priors we want to check (aka just changing the sd)
+real_sd_priors <- c(
+  prior(normal(0.15, 0.009), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.01), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.02), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.03), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.04), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.05), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.06), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.07), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.08), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.09), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.10), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.11), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.12), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.13), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.14), class = b, coef= "DiagTD:Visit"),
+  prior(normal(0.15, 0.15), class = b, coef= "DiagTD:Visit")
+)
+
+#loop through making priors with different sd
+for (i in seq(1, 16)) {
+  TD_priors_real[5,] <- real_sd_priors[i,]
+  real_model_for_loop_TD <- brm(
+    MLU_f,
+    data= d_real_no_0,
+    family = lognormal,
+    prior = TD_priors_real,
+    sample_prior = T,
+    iter = 5000,
+    warmup = 1000,
+    backend = "cmdstanr",
+    threads = threading(2),
+    cores = 2,
+    chains = 2,
+    control = list(adapt_delta = 0.99, max_treedepth = 20)
+  )
+    
+  Model_for_loop_samp_real_TD <- as_draws_df(real_model_for_loop_TD)
+  #posterior_predictions <- spread_draws(model_for_loop, b_DiagASD:Visit) #slope, so b_DiagASD:Visit
+  real_posterior_predictions_TD <- Model_for_loop_samp_real_TD[,4]
+  real_posterior_prediction_TD[i] <- median(real_posterior_predictions_TD$`b_DiagTD:Visit`)
+  real_posterior_prediction_TD_lci[i] <- quantile(real_posterior_predictions_TD$`b_DiagTD:Visit`, prob = 0.025) #lower boundy for 95% interval
+  real_posterior_prediction_TD_uci[i] <- quantile(real_posterior_predictions_TD$`b_DiagTD:Visit`, prob = 0.975) #upper boundry for 95% interval
+}
+
+#view(Model_for_loop_samp_real)
+
+#Making dataframe from values from loop
+real_sensitivity_check_TD <- data.frame(TD_prior_SD_real, real_posterior_prediction_TD, real_posterior_prediction_TD_lci, real_posterior_prediction_TD_uci) 
+
+#visualizing the sensitivity plot
+real_rubostness_check_td <- ggplot(data=real_sensitivity_check_TD, aes(x=TD_prior_SD_real, y=real_posterior_prediction_TD)) +
+  geom_point(size = 3) +
+  geom_pointrange(ymin = real_posterior_prediction_TD_lci, ymax = real_posterior_prediction_TD_uci) + #pointrange is 95% interval (vertical lines for each dot)
+  ylim(0.05, 0.25) + #range for the slope (y-aksis range)
+  labs(x="Standard Deviation of Slope Prior", 
+       y="Posterior Estimate for Slope", 
+       title="Sensitivity analysis for multi-level model TD") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size = 15),
+        axis.title.x = element_text(size = 13),
+        axis.text.y = element_text(size = 12),
+        axis.text.x = element_text(size = 12),
+        axis.title.y = element_text(size = 13))
+
+
+
+
+ggsave("true_real_rubostness_check_td_no_0.png", plot=real_rubostness_check_td)
+real_rubostness_check_td
+
+```
+
+traceplot
+```{r}
+"mcmc_parcoord(
+  MLU_m2,
+  pars = vars(matches('^b')),
+  size = .25, 
+  alpha = .01,
+  np = nuts_params(MLU_m2),  # without this div trans won't be highlighted
+  np_style = parcoord_style_np(
+    div_color = "#ff5500",
+    div_size = 1,
+    div_alpha = .1
+  )
+) +
+  guides(x = guide_axis(n.dodge = 2)) +
+  theme(
+    axis.text.x = element_text(size = 6),
+    panel.grid.major.x = element_line(color = '#00AAFF80', size = .1)
+  )"
+```
+
+
+```{r}
+view(d_real_no_0)
+```
+
+#cross validation
+```{r}
+cross_m1 <- bf(CHI_MLU ~ 0 + Diag + Diag:Visit + (1 + Visit|Child.ID))
+
+cross_m2 <- bf(CHI_MLU ~ 0 + Diag + Diag:Visit + Diag:verbalIQ1 + Diag:nonVerbalIQ1 + Diag:Socialization1 + (1 + Visit|Child.ID))
+
+cross_m3 <- bf(CHI_MLU ~ 0 + Diag + Diag:Visit + Diag:MOT_MLU + Diag:types_MOT + Diag:tokens_MOT +
+(1 + Visit|Child.ID))
+
+cross_m4 <- bf(CHI_MLU ~ 0 + Diag + Diag:Visit + Diag:verbalIQ1 + Diag:nonVerbalIQ1 + Diag:Socialization1 + Diag:MOT_MLU + Diag:types_MOT + Diag:tokens_MOT + (1 + Visit|Child.ID))
+
+```
+#?????
+```{r}
+kfold1 <- kfold(UniqueWords_m3, folds = "stratified",group = "Child.ID",K = 5,save_fits= TRUE)
+```
+
+
+
+
